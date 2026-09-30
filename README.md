@@ -5,7 +5,12 @@ link de acceso, autorizar la cámara y nada más, el teléfono empieza a transmi
 directo en la pantalla de la PC.
 
 No hace falta abrir la app de cámara del teléfono: el navegador toma la pista de video con
-`getUserMedia()` y la envía por WebRTC.
+`getUserMedia()` y la envía por WebRTC. La pestaña puede quedarse en segundo plano: cambiar de app
+o bloquear la pantalla **no** corta la transmisión.
+
+> **Antes de la demo, lee "Por qué hace falta TURN" más abajo.** En la misma red funciona sin
+> configuración; con datos móviles hace falta un relé TURN. No hay TURN público gratuito que
+> funcione, así que hay que montar uno propio (gratis, unos 10 minutos).
 
 ```
    TELEFONO (emisor)                        PC (dueña)
@@ -186,20 +191,39 @@ túnel solo expone una URL. Por eso `server.py` sirve también de proxy: si la p
 
 ---
 
-## Configurar un TURN propio (opcional, recomendado para la demo)
+## Configurar un TURN propio (necesario para datos móviles)
 
-Si los relés gratuitos fallan, crea una TURN key gratuita en
-[dashboard.cloudflare.com → TURN → Keys](https://dash.cloudflare.com) y exporta:
+Los TURN públicos gratuitos **están muertos**. Se comprobó uno por uno con un `Allocate` TURN real
+(RFC 5766) contra `openrelay.metered.ca:80/443`, `relay.metered.ca:80` y `stun.metered.ca:80`:
+`openrelay.metered.ca:443` acepta la conexión y la cierra sin responder, y los demás dan timeout.
+Por eso `ice.json` ya no lista ninguno: es preferible un vacío honesto a cinco entradas que
+nunca conectan.
+
+La solución es una TURN key de Cloudflare, que es gratuita. El script lo hace todo:
 
 ```powershell
-$env:CLOUDFLARE_API_TOKEN="tu token"
-$env:CLOUDFLARE_ACCOUNT_ID="tu account id"
-$env:CLOUDFLARE_TURN_KEY_ID="id de la TURN key"
-python server.py
+powershell -ExecutionPolicy Bypass -File configurar-turn.ps1
 ```
 
-`server.py` pide credenciales temporales (24 h) a la API de Cloudflare y las añade al principio de
-la lista ICE, con prioridad sobre los relés gratuitos.
+Pide tres datos (y al terminar ejecuta `--doctor` para confirmar):
+
+1. **Key ID** — en [dashboard.cloudflare.com → TURN → Create a TURN key](https://dash.cloudflare.com).
+2. **Account ID** — en la misma pantalla, arriba a la derecha.
+3. **API Token** — en *API Tokens → Create Token*, con permiso **TURN: Edit**.
+
+Los guarda en `.env.local` (ignorado por git), así que no hay que exportar nada a mano después.
+`server.py` pide credenciales temporales (24 h) a la API de Cloudflare y las antepone a la lista
+ICE, con prioridad sobre todo lo demás.
+
+Para comprobar en cualquier momento que el relé responde de verdad:
+
+```bash
+python server.py --doctor
+```
+
+Ese comando habla TURN con cada servidor configurado y dice `[ OK ]` o el código de error
+concreto (`401` credenciales, `timeout`, `ConnectionResetError`…). Es el primer sitio donde mirar
+si la demo va a fallar.
 
 ## Extensiones posibles
 

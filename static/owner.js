@@ -104,7 +104,9 @@ async function makeOffer() {
   hideAlert();
   setNet("warn", "negociando");
 
-  peer = new Peer(window.__ice, (msg) => signal.signal(msg));
+  peer = new Peer(window.__ice, (msg) => signal.signal(msg), {
+    iceTransportPolicy: qs.get("relay") ? "relay" : null,
+  });
 
   peer.pc.onicecandidate = ((original) => (ev) => {
     if (ev.candidate) {
@@ -188,6 +190,14 @@ function start() {
       setLink(cfg.phoneLink);
       $("m-turn").textContent = cfg.turnCount || "ninguno";
       $("m-turn").className = cfg.turnCount ? "" : "na";
+      if (!cfg.turnCount) {
+        alertBox(
+          "Sin relé TURN: solo funcionará en la misma red",
+          "Con el teléfono en el mismo WiFi que la PC debería verse sin problema. " +
+            "Pero con datos móviles el NAT de la operadora bloquea la entrada y no habrá imagen. " +
+            "Para eso hace falta un TURN: revisa el apartado de seguridad del README (es gratis con Cloudflare)."
+        );
+      }
     } catch (err) {
       say(`config: ${err.message}`);
     }

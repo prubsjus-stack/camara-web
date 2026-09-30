@@ -64,6 +64,7 @@ function bindControl(channel) {
 
 function openSignal() {
   signal = new Signal("phone", qs.get("t") || "");
+  const policy = qs.get("relay") ? "relay" : null;
   window.addEventListener("beforeunload", () => signal.stop());
 
   signal.on("ready", (msg) => {
@@ -86,7 +87,7 @@ function openSignal() {
     if (d.kind !== "offer" || !localStream) return;
 
     if (peer) peer.close();
-    peer = new Peer(window.__ice, (m) => signal.signal(m));
+    peer = new Peer(window.__ice, (m) => signal.signal(m), { iceTransportPolicy: policy });
 
     peer.pc.onconnectionstatechange = () => {
       const s = peer.pc.connectionState;
@@ -159,10 +160,8 @@ $("btn-stop").onclick = () => {
   reset("Transmisión detenida");
 };
 
-// El bloqueo de pantalla corta la pista: se detiene sola para no quedar transmitiendo sin querer.
-document.addEventListener("visibilitychange", () => {
-  if (document.hidden && peer && peer.pc.connectionState === "connected") reset("Transmisión detenida");
-});
+// Cambiar de app o bloquear la pantalla NO corta la transmision: la pista
+// sigue viva mientras la pestana exista. Solo se corta al cerrar la pestana.
 
 if (!qs.get("t")) {
   ui("err", "Link incompleto", "Pide a tu PC que te mande el link de acceso otra vez", true);

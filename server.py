@@ -9,12 +9,15 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import hashlib
+import hmac
 import io
 import json
 import os
 import re
 import secrets
 import socket
+import struct
 import subprocess
 import sys
 import threading
@@ -199,6 +202,19 @@ def load_ice() -> list[dict]:
             ]
         },
     ]
+
+
+def load_env_local() -> None:
+    """Carga .env.local si existe, para no tener que exportar variables a mano."""
+    archivo = BASE_DIR / ".env.local"
+    if not archivo.is_file():
+        return
+    for linea in archivo.read_text(encoding="utf-8", errors="replace").splitlines():
+        linea = linea.strip()
+        if not linea or linea.startswith("#") or "=" not in linea:
+            continue
+        clave, valor = linea.split("=", 1)
+        os.environ.setdefault(clave.strip(), valor.strip().strip('"').strip("'"))
 
 
 def add_cloudflare_turn(servers: list[dict]) -> list[dict]:
@@ -507,11 +523,173 @@ def parse_args() -> argparse.Namespace:
     ap.add_argument("--no-open", action="store_true", help="no abrir el navegador automaticamente")
     ap.add_argument("--owner-token", default=None, help="fija el token de la PC (link de demo estable)")
     ap.add_argument("--phone-token", default=None, help="fija el token del telefono (link de demo estable)")
+    ap.add_argument(
+        "--doctor",
+        action="store_true",
+        help="prueba los servidores STUN/TURN de ice.json y termina (no inicia el servidor)",
+    )
     return ap.parse_args()
 
 
 WS_PORT = 0
 START = time.time()
+
+
+def _stun_probe(host: str, port: int, udp: bool, timeout: float = 5.0) -> str:
+    """Binding request minima. Devuelve 'ok', 'timeout' o el nombre del error."""
+    import socket
+
+    def pedir() -> bytes:
+        attrs = struct.pack(">HH", 0x0020, 8) + os.urandom(8)
+        return struct.pack(">HHI12s", 0x0001, len(attrs), 0x2112A442, os.urandom(12)) + attrs
+
+    try:
+        ip = socket.gethostbyname(host)
+    except socket.gaierror:
+        return "dns"
+    try:
+        if udp:
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            s.settimeout(timeout)
+            s.connect((ip, port))
+            s.send(pedir())
+            data = s.recv(2048)
+        else:
+            s = socket.create_connection((ip, port), timeout=timeout)
+            s.sendall(pedir())
+            data = s.recv(2048)
+        code = struct.unpack(">H", data[0:2])[0] if len(data) >= 4 else -1
+        return "ok" if code in (0x0101, 0x0102) else f"err{code:#06x}"
+    except socket.timeout:
+        return "timeout"
+    except OSError as exc:
+        return exc.__class__.__name__
+
+
+def _turn_allocate(url: str, username: str, credential: str) -> str:
+    """Allocate TURN real (RFC 5766/6062). Devuelve 'ok' o el codigo de error."""
+    import socket
+
+    base = re.sub(r"^(turns?|stuns?):", "", url)
+    base = base.split("?")[0]
+    host, _, port = base.partition(":")
+    port = int(port or 3478)
+    udp = "transport=udp" in url or not url.startswith("turns:")
+
+    def armar(con_integridad: bool) -> bytes:
+        cuerpo = struct.pack(">HB", 0x0019, 4) + b"\x11\x00\x00\x00"
+        if con_integridad:
+            cuerpo += struct.pack(">HB", 0x0006, len(username)) + username.encode()
+            cuerpo += struct.pack(">HB", 0x0014, len(realm)) + realm.encode()
+            cuerpo += struct.pack(">HB", 0x0015, len(nonce)) + nonce.encode()
+            if len(cuerpo) % 4:
+                cuerpo += b"\x00" * (4 - len(cuerpo) % 4)
+        cabecera = struct.pack(">HHI12s", 0x0003, len(cuerpo) + (24 if con_integridad else 0),
+                                0x2112A442, os.urandom(12))
+        if con_integridad:
+            clave = hashlib.md5(f"{username}:{realm}:{credential}".encode()).digest()
+            cuerpo += struct.pack(">HH", 0x0008, 20) + hmac.new(
+                clave, cabecera + cuerpo + struct.pack(">I", 16 + len(cuerpo) + 4), hashlib.sha1).digest()
+        return cabecera + cuerpo
+
+    def attrs_de(data: bytes):
+        if len(data) < 20:
+            return []
+        largo = struct.unpack(">H", data[2:4])[0]
+        off, salida = 20, []
+        while off + 4 <= min(len(data), 20 + largo):
+            tipo, alto = struct.unpack(">HH", data[off:off + 4])
+            salida.append((tipo, data[off + 4:off + 4 + alto]))
+            off += 4 + alto
+        return salida
+
+    realm = nonce = ""
+    try:
+        if udp:
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            s.settimeout(6)
+            s.connect((socket.gethostbyname(host), port))
+            enviar = lambda m: s.send(m)
+            recibir = lambda: s.recv(2048)
+        else:
+            s = socket.create_connection((socket.gethostbyname(host), port), timeout=6)
+            s.settimeout(6)
+            enviar = s.sendall
+            recibir = lambda: s.recv(2048)
+    except OSError as exc:
+        return exc.__class__.__name__
+
+    try:
+        enviar(armar(False))
+        r1 = recibir()
+        for tipo, val in attrs_de(r1):
+            if tipo == 0x0014:
+                realm = val.decode(errors="replace")
+            elif tipo == 0x0015:
+                nonce = val.decode(errors="replace")
+        if not realm or not nonce:
+            return "sin-realm"
+        enviar(armar(True))
+        r2 = recibir()
+        codigo = struct.unpack(">H", r2[0:2])[0] if len(r2) >= 4 else -1
+        if codigo == 0x0003:
+            return "ok"
+        for tipo, val in attrs_de(r2):
+            if tipo == 0x0009 and len(val) >= 4:
+                return f"e{val[2]}"
+        return f"tipo{codigo:#06x}"
+    except (socket.timeout, TimeoutError):
+        return "timeout"
+    except OSError as exc:
+        return exc.__class__.__name__
+    finally:
+        s.close()
+
+
+def doctor(servers: list[dict]) -> int:
+    """Comprueba cada servidor ICE y dice si la demo va a funcionar de verdad."""
+    print("\n=== DIAGNOSTICO DE RED (server.py --doctor) ===\n")
+    turno_ok: list[str] = []
+    turno_malos: list[str] = []
+    stun_ok = 0
+
+    for server in servers:
+        urls = server.get("urls")
+        urls = urls if isinstance(urls, list) else [urls]
+        for url in urls:
+            limpio = re.sub(r"^(turns?|stuns?):", "", url).split("?")[0]
+            host, _, puerto = limpio.partition(":")
+            user, passwd = server.get("username", ""), server.get("credential", "")
+            if url.startswith(("turn:", "turns:")):
+                resultado = _turn_allocate(url, user, passwd)
+                if resultado == "ok":
+                    turno_ok.append(url)
+                    print(f"  [ OK ] TURN  {url}")
+                else:
+                    turno_malos.append(f"{url} ({resultado})")
+                    print(f"  [mal ] TURN  {url}  -> {resultado}")
+            else:
+                r = _stun_probe(host, int(puerto or 3478), "transport=udp" not in url)
+                if r == "ok":
+                    stun_ok += 1
+                    print(f"  [ OK ] STUN  {url}")
+                else:
+                    print(f"  [mal ] STUN  {url}  -> {r}")
+
+    print(f"\n  STUN operativos: {stun_ok}   TURN operativos: {len(turno_ok)}")
+    if turno_malos:
+        print("  TURN caidos: " + ", ".join(turno_malos))
+
+    print()
+    if not turno_ok:
+        print("  SIN TURN: en la misma red funcionara, pero con datos moviles NO.")
+        print("  El NAT movil no deja entrar la conexion y hace falta un rele.")
+        print("  Monta uno gratis: https://dash.cloudflare.com > TURN > Create a TURN key")
+        print("  y exporta CLOUDFLARE_TURN_KEY_ID, CLOUDFLARE_ACCOUNT_ID y CLOUDFLARE_API_TOKEN.")
+    else:
+        print("  LISTO: hay al menos un rele TURN, la demo funcionara con datos moviles.")
+    print()
+    return 0 if turno_ok else 1
 
 
 def main() -> int:
@@ -522,7 +700,12 @@ def main() -> int:
         print(f"[error] falta la carpeta {STATIC_DIR}")
         return 1
 
+    load_env_local()
     ice_servers = add_cloudflare_turn(load_ice())
+
+    if args.doctor:
+        return doctor(ice_servers)
+
     tokens = {
         OWNER: args.owner_token or secrets.token_urlsafe(18),
         PHONE: args.phone_token or secrets.token_urlsafe(18),

@@ -1,6 +1,7 @@
 {
-  "_comentario": "Servidores ICE verificados a mano. STUN descubre la IP publica; TURN retransmite el video cuando el NAT lo impide. Los puertos TCP/443 son los que funcionan cuando la red bloquea UDP (tipico en datos moviles).",
-  "_verificado": "2026-09-30: stun.cloudflare.com responde en 12ms; openrelay/relay.metered.ca abren en TCP 80 y 443 y responden 'pide-auth' por UDP, que es lo correcto para TURN. stun.l.google.com y relay.metered.ca:443 NO respondian y se eliminaron.",
+  "_comentario": "Solo STUN, a proposito. STUN descubre la IP publica pero NO abre puertos: entre el WiFi de casa y la red movil hace falta un rele TURN. Los TURN publicos gratuitos (openrelay/relay/stun.metered.ca) se comprobaron uno por uno con un Allocate TURN real y todos fallan: openrelay.metered.ca:443 cierra sin responder, :80 y relay.metered.ca dan timeout. Por eso se retiraron en vez de dejar entradas que nunca conectan. Un TURN de verdad lo anade server.py solo si defines las variables de Cloudflare.",
+  "_verificado": "2026-09-30 con `python server.py --doctor`: stun.cloudflare.com responde en ~12 ms. stun.l.google.com no responde (fuera).",
+  "_como_anadir_turn": "exporta CLOUDFLARE_TURN_KEY_ID, CLOUDFLARE_ACCOUNT_ID y CLOUDFLARE_API_TOKEN, y server.py antepone rtc.live.cloudflare.com con credenciales efimeras. Despues corre `python server.py --doctor` para confirmar que el Allocate responde ok.",
   "iceServers": [
     {
       "urls": [
@@ -8,17 +9,6 @@
         "stun:stun.voipbuster.com:3478",
         "stun:stun.sipnet.ru:3478"
       ]
-    },
-    {
-      "urls": [
-        "turn:openrelay.metered.ca:443?transport=tcp",
-        "turn:relay.metered.ca:80",
-        "turn:openrelay.metered.ca:80",
-        "turn:stun.metered.ca:80",
-        "turn:relay.metered.ca:80?transport=tcp"
-      ],
-      "username": "openrelayproject",
-      "credential": "openrelayproject"
     }
   ]
 }

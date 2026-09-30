@@ -16,9 +16,14 @@ function setPill(el, state, text) {
 }
 
 class Peer {
-  constructor(iceServers, onSignal) {
+  constructor(iceServers, onSignal, opts) {
     this.onSignal = onSignal;
-    this.pc = new RTCPeerConnection({ iceServers: iceServers || [], bundlePolicy: "max-bundle" });
+    const cfg = { iceServers: iceServers || [], bundlePolicy: "max-bundle" };
+    // ?relay=1 fuerza relay: solo se admiten candidatos TURN. Sirve para
+    // comprobar que los relés funcionan, porque si no el navegador siempre
+    // escoge una ruta directa de la red local y nunca los llega a usar.
+    if (opts && opts.iceTransportPolicy) cfg.iceTransportPolicy = opts.iceTransportPolicy;
+    this.pc = new RTCPeerConnection(cfg);
     this.pending = [];
     this.remoteReady = false;
     this.pc.onicecandidate = (ev) => {
