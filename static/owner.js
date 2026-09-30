@@ -35,6 +35,8 @@ function setNet(state, text) {
 function setPlaceholder(title, sub) {
   $("ph-title").textContent = title;
   $("ph-sub").textContent = sub;
+  // Sin texto no hay nada que avisar, y el panel debe dejar de tapar el video.
+  $("ph").classList.toggle("hide", !title);
 }
 
 // Igual que el telefono, la PC reporta su estado para poder leer el log.
