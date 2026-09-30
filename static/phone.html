@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0b0f14">
+<title>CamaraWeb · teléfono emisor</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="wrap">
+
+  <header class="top">
+    <div class="brand">CamaraWeb <small>Teléfono emisor</small></div>
+    <div class="pill" id="pill-ws"><span class="dot"></span><span>conectando…</span></div>
+    <div class="spacer"></div>
+    <div class="pill" id="pill-tx"><span class="dot"></span><span>enviando: —</span></div>
+  </header>
+
+  <div class="card" id="intro" style="text-align:center">
+    <h2 style="text-align:left">Transmitir mi cámara a la PC</h2>
+    <p class="note" id="note-intro" style="font-size:14px;margin:0 0 14px">
+      Pulsa el botón y autoriza la cámara. No necesitas abrir la app de cámara:
+      el navegador envía la imagen directamente a la PC dueña.
+    </p>
+    <button class="primary bigbtn wide" id="btn-start">Autorizar cámara y transmitir</button>
+    <label class="checkline" style="justify-content:center;margin-top:14px">
+      <input type="checkbox" id="chk-audio" checked> Enviar también el micrófono
+    </label>
+  </div>
+
+  <div class="video-box self" id="box" style="display:none">
+    <video id="video" autoplay playsinline muted></video>
+    <div class="placeholder" id="ph">
+      <div class="big">Preparando…</div>
+      <div>Espera a que la PC responda.</div>
+    </div>
+    <div class="badge-live" id="live"><span class="dot"></span> ENVIANDO A LA PC</div>
+  </div>
+
+  <div class="card" id="controls" style="display:none">
+    <div class="row">
+      <button id="btn-flip">Cambiar cámara</button>
+      <button id="btn-mic" class="danger">Silenciar micrófono</button>
+      <button id="btn-stop" class="danger">Detener transmisión</button>
+    </div>
+    <dl class="kv" style="margin-top:14px">
+      <dt>Resolución enviada</dt><dd id="m-res">—</dd>
+      <dt>FPS</dt><dd id="m-fps">—</dd>
+      <dt>Bitrate</dt><dd id="m-kbps">—</dd>
+      <dt>Codec</dt><dd id="m-codec">—</dd>
+      <dt>Ruta</dt><dd id="m-path">—</dd>
+    </dl>
+    <p class="note">Cierra esta pestaña o pulsa «Detener» cuando termines.</p>
+  </div>
+
+  <div class="card">
+    <h2>Registro</h2>
+    <div class="log" id="log"></div>
+  </div>
+
+</div>
+<script src="common.js"></script>
+<script src="phone.js"></script>
+</body>
+</html>

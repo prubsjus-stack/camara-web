@@ -1,0 +1,2 @@
+websockets>=13,<18
+qrcode>=7.4

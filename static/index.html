@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CamaraWeb · PC dueña</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="wrap">
+
+  <header class="top">
+    <div class="brand">CamaraWeb <small>PC dueña · recibe el video</small></div>
+    <div class="pill" id="pill-ws"><span class="dot"></span><span>conectando…</span></div>
+    <div class="pill" id="pill-phone"><span class="dot"></span><span>sin teléfono</span></div>
+    <div class="spacer"></div>
+    <div class="pill" id="pill-path"><span class="dot"></span><span>ruta: n/d</span></div>
+  </header>
+
+  <div class="grid">
+    <div>
+      <div class="video-box" id="box">
+        <video id="video" autoplay playsinline muted></video>
+        <div class="placeholder" id="ph">
+          <div class="big" id="ph-title">Esperando al teléfono</div>
+          <div id="ph-sub">Comparte el link de acceso y autoriza la cámara desde el teléfono.</div>
+        </div>
+        <div class="badge-live" id="live"><span class="dot"></span> EN VIVO</div>
+      </div>
+
+      <div class="card" style="margin-top:18px">
+        <h2>Control</h2>
+        <div class="row">
+          <button id="btn-full" disabled>Pantalla completa</button>
+          <button id="btn-snap" disabled>Guardar imagen</button>
+          <button id="btn-flip" disabled>Pedir cambiar cámara</button>
+          <button id="btn-kick" class="danger" disabled>Desconectar teléfono</button>
+        </div>
+        <p class="note">El video llega directo del teléfono a esta PC. No pasa por ningún servidor de video.</p>
+      </div>
+
+      <div class="card">
+        <h2>Registro de eventos</h2>
+        <div class="log" id="log"></div>
+      </div>
+    </div>
+
+    <aside>
+      <div class="card">
+        <h2>Link de acceso</h2>
+        <div class="linkbox">
+          <input type="text" id="link" readonly placeholder="generando túnel HTTPS…">
+          <button id="btn-copy">Copiar</button>
+        </div>
+        <div class="qr wait" id="qr">Esperando URL pública…</div>
+        <p class="note">Ábrelo en el teléfono con datos móviles o cualquier red. Contiene un token: solo quien tenga el link puede transmitir.</p>
+      </div>
+
+      <div class="card">
+        <h2>Métricas</h2>
+        <dl class="kv">
+          <dt>Resolución</dt><dd class="na" id="m-res">—</dd>
+          <dt>FPS</dt><dd class="na" id="m-fps">—</dd>
+          <dt>Bitrate</dt><dd class="na" id="m-kbps">—</dd>
+          <dt>Latencia RTT</dt><dd class="na" id="m-rtt">—</dd>
+          <dt>Codec</dt><dd class="na" id="m-codec">—</dd>
+          <dt>Conexión</dt><dd class="na" id="m-path">—</dd>
+          <dt>Teléfonos TURN</dt><dd class="na" id="m-turn">—</dd>
+        </dl>
+      </div>
+
+      <div class="card">
+        <h2>Red</h2>
+        <p class="note" id="m-note">—</p>
+      </div>
+    </aside>
+  </div>
+
+</div>
+<script src="common.js"></script>
+<script src="owner.js"></script>
+</body>
+</html>

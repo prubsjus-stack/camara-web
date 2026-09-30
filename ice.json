@@ -1,0 +1,21 @@
+{
+  "_comentario": "Servidores ICE. STUN descubre la IP publica; TURN retransmite el video cuando el NAT lo impide. Sin ningun TURN alcanzable, una red movil (NAT simetrico) no podra establecer la transmision.",
+  "iceServers": [
+    {
+      "urls": [
+        "stun:stun.cloudflare.com:3478",
+        "stun:stun.l.google.com:19302",
+        "stun:stun1.l.google.com:19302"
+      ]
+    },
+    {
+      "urls": [
+        "turn:openrelay.metered.ca:80",
+        "turn:relay.metered.ca:80",
+        "turns:relay.metered.ca:443?transport=tcp"
+      ],
+      "username": "openrelayproject",
+      "credential": "openrelayproject"
+    }
+  ]
+}
