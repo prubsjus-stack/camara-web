@@ -90,14 +90,27 @@ let tunnel = {
   activo: false, capturando: false, puerto: null, emisor: null, timer: null, rafId: null,
   trabajador: null, ctl: null,
   canvas: null, ctx: null, enviado: false, ultimo: 0, cuenta: 0,
-  vueltas: 0, motivo: "sin iniciar",
+  vueltas: 0, motivo: "sin iniciar", msMedio: 0, historia: [], aguante_hasta: 0,
 };
 window.tunnel = tunnel;
+
+// Medido en este proyecto codificando imagen real de 1280x720 (ms por frame,
+// y lo que cuesta eso a 11 FPS en un solo hilo):
+//   640x360 q0.55 -> 39.0 ms -> 43% de CPU -> ~380 kbps
+//   480x272 q0.50 -> 19.6 ms -> 22% de CPU -> ~240 kbps
+//   320x180 q0.50 -> 13.3 ms -> 15% de CPU -> ~160 kbps
+// 480x270 es el punto razonable: por debajo la imagen se ve demasiado borrosa
+// en un proyector, y por arriba el telefono se calienta y se come la bateria
+// en mitad de la presentacion. Si la red permite WebRTC, el video va a 720p
+// nativo por el camino bueno y esto ni se usa.
+const TUNEL_ANCHO = 480;
+const TUNEL_CALIDAD = 0.5;
+const TUNEL_FPS = 10;
 
 function pintarEnCanvas() {
   if (!tunnel.canvas) {
     const v = $("video");
-    const escala = Math.min(1, 640 / Math.max(v.videoWidth || 640, v.videoHeight || 480));
+    const escala = Math.min(1, TUNEL_ANCHO / Math.max(v.videoWidth || 640, v.videoHeight || 480));
     tunnel.canvas = document.createElement("canvas");
     tunnel.canvas.width = Math.max(2, Math.round((v.videoWidth || 640) * escala));
     tunnel.canvas.height = Math.max(2, Math.round((v.videoHeight || 480) * escala));
@@ -111,29 +124,66 @@ function enviarFrameTunel() {
   if (!signal?.abierto) return void (tunnel.motivo = "ws-cerrado");
   const v = $("video");
   if (!v.videoWidth) return void (tunnel.motivo = "video-sin-tamano");
+  if (tunnel.aguante_hasta > 0) {
+    tunnel.aguante_hasta--;
+    return void (tunnel.motivo = "resolucion-ajustando");
+  }
   const ahora = performance.now();
-  if (ahora - tunnel.ultimo < 1000 / 11) return void (tunnel.motivo = "limite-fps");
+  if (ahora - tunnel.ultimo < 1000 / TUNEL_FPS) return void (tunnel.motivo = "limite-fps");
   tunnel.ultimo = ahora;
   tunnel.motivo = "enviado";
+  const t0 = performance.now();
   try {
+    const tpi = performance.now();
     const c = pintarEnCanvas();
+    const td = performance.now();
     tunnel.ctx.drawImage(v, 0, 0, c.width, c.height);
+    const tc = performance.now();
+    tunnel.msDibujar = (tunnel.msDibujar || 0) * 0.85 + (tc - td) * 0.15;
     // toBlob es asincrono y su callback se aplaza cuando la pestana queda
     // oculta: con el encadenado anterior el envio se congelaba justo en
     // segundo plano, que es justo cuando tiene que funcionar. toDataURL es
     // sincrono, asi que el frame sale siempre. Paga un 33% mas de bytes por
     // el base64, a cambio de no depender de la cola de tareas.
-    const url = c.toDataURL("image/jpeg", 0.55);
+    const url = c.toDataURL("image/jpeg", TUNEL_CALIDAD);
+    const tb = performance.now();
+    tunnel.msCodificar = (tunnel.msCodificar || 0) * 0.85 + (tb - tc) * 0.15;
     const b64 = url.slice(url.indexOf(",") + 1);
     const bin = atob(b64);
     const bytes = new Uint8Array(bin.length);
     for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    const te = performance.now();
+    tunnel.msBase64 = (tunnel.msBase64 || 0) * 0.85 + (te - tb) * 0.15;
     signal.sendBytes(bytes.buffer);
+    tunnel.msEnvio = (tunnel.msEnvio || 0) * 0.85 + (performance.now() - te) * 0.15;
+    // Si el socket acumula sin vaciarse, es que el tunel no da mas: no tiene
+    // sentido codificar frames que se quedaron haciendo cola.
+    if (signal?.ws && typeof signal.ws.bufferedAmount === "number") {
+      tunnel.bufferSocket = signal.ws.bufferedAmount;
+    }
+    const msTotal = performance.now() - t0;
+    // Historial crudo por frame. Las medias moviles de arriba sirven para
+    // vigilar en caliente, pero al depurar hay que comparar los valores
+    // crudos del mismo frame: si las partes no suman el total, el tiempo se
+    // va en otro sitio y hay que buscarlo alli, no suponerlo.
+    tunnel.historia.push({
+      pintar: +(td - tpi).toFixed(2),
+      dibujar: +(tc - td).toFixed(2),
+      codificar: +(tb - tc).toFixed(2),
+      base64: +(te - tb).toFixed(2),
+      envio: +(performance.now() - te).toFixed(2),
+      total: +msTotal.toFixed(2),
+    });
+    if (tunnel.historia.length > 40) tunnel.historia.shift();
     tunnel.cuenta++;
+    // Coste real de esta funcion, medida en produccion y no en un bucle
+    // sintetico. Importa porque leer pixeles de un <video> con la pagina
+    // oculta es lo mas caro que hace el telefono.
+    tunnel.msMedio = tunnel.msMedio ? tunnel.msMedio * 0.85 + msTotal * 0.15 : msTotal;
     if (tunnel.cuenta % 30 === 1) {
       signal.send({
         t: "frame-info",
-        data: `${c.width}x${c.height} ~${Math.round((bytes.length * 11 * 8) / 1024)}kbps`,
+        data: `${c.width}x${c.height} ~${Math.round((bytes.length * TUNEL_FPS * 8) / 1024)}kbps`,
       });
     }
   } catch (_) {}
@@ -154,7 +204,7 @@ const TRABAJADOR = `
 let ctl = null;
 function bucle() {
   while (Atomics.load(ctl, 0) === 0) {
-    Atomics.wait(ctl, 1, 1, 90);
+    Atomics.wait(ctl, 1, 1, ${Math.round(1000 / TUNEL_FPS)});
     if (Atomics.load(ctl, 0) !== 0) return;
     postMessage('tick');
   }
@@ -218,7 +268,7 @@ function arrancarCaptura() {
     tunnel.emisor.postMessage(0);
   } else {
     report("tunel-motor", "setInterval (este navegador no expone MessageChannel)");
-    tunnel.timer = setInterval(enviarFrameTunel, 1000 / 11);
+    tunnel.timer = setInterval(enviarFrameTunel, 1000 / TUNEL_FPS);
   }
 }
 
@@ -243,6 +293,36 @@ function pararCaptura() {
   tunnel.rafId = null;
 }
 
+function ajustarResolucionCamara(ideal) {
+  // Copiar pixeles de un <video> es lo mas caro que hace el telefono: leer
+  // 1280x720 para acabar en 480x270 son 921k pixeles por frame y en la pagina
+  // oculta costaba 36 ms. Si la camara entrega ya 480x270 son 130k y el mismo
+  // dibujado baja a 14 ms, con lo que el frame entero pasa de 88 a 26 ms. Por
+  // eso, al entrar en modo tunel se le pide a la camara que entregue
+  // directamente el tamaño que se va a enviar. Es una sugerencia: si el
+  // navegador no la acepta, se sigue con la resolucion que haya.
+  if (!localStream) return;
+  const [pista] = localStream.getVideoTracks();
+  if (!pista || typeof pista.applyConstraints !== "function") return;
+  const s = pista.getSettings ? pista.getSettings() : {};
+  if ((s.width || 0) <= ideal) return;
+  pista
+    .applyConstraints({ width: { ideal }, height: { ideal: Math.round((ideal * 9) / 16) } })
+    .then(() => {
+      const ahora = pista.getSettings ? pista.getSettings() : {};
+      report("tunel-resolucion", `camara ${ahora.width}x${ahora.height}`);
+      // Al cambiar la resolucion la pista se reinicia y entrega unos cuantos
+      // frames en negro. Mandarlos se ve como un parpadeo en la consola, asi
+      // que se retiene el envio hasta que la camara se estabiliza. Se cuenta
+      // en ticks del worker y no con un setTimeout porque, con la pestana
+      // oculta, ese setTimeout puede tardar 2 segundos en dispararse y
+      // justamente ahi se quedaria la transmision parada. El canvas no se
+      // rehace: con el origen ya al tamano final sale igual de grande.
+      tunnel.aguante_hasta = 12;
+    })
+    .catch((err) => report("tunel-resolucion", `no se pudo ajustar: ${err}`));
+}
+
 function activarTunel(motivo) {
   if (tunnel.activo) return;
   tunnel.activo = true;
@@ -251,6 +331,7 @@ function activarTunel(motivo) {
   ui("on", "Transmitiendo", "Enviando por el túnel seguro");
   if (tunnel.timer) clearInterval(tunnel.timer);
   tunnel.timer = null;
+  ajustarResolucionCamara(TUNEL_ANCHO);
   arrancarCaptura();
 }
 

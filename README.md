@@ -42,7 +42,7 @@ Hay dos rutas, y el teléfono elige la mejor sin que nadie toque nada:
 | **Directa (P2P)** | las dos redes se alcanzan (mismo WiFi, o alguna con TURN) | WebRTC directo, no pasa por el servidor |
 | **Túnel** | redes aisladas: móvil 4G ↔ WiFi de la universidad | JPEG por el WebSocket del túnel |
 
-En la ruta del túnel el video **sí pasa por el servidor** (a ~380 kbps), y por eso es más simple y
+En la ruta del túnel el video **sí pasa por el servidor** (a ~240 kbps), y por eso es más simple y
 más lento, pero funciona en cualquier red sin depender de nadie.
 
 ---
@@ -96,22 +96,31 @@ Qué pasa por dentro:
 1. La PC manda su oferta WebRTC. La negociación ICE no encuentra candidato `relay` porque no hay
    ningún TURN configurado.
 2. A los **7 segundos** —o en el acto si ICE pasa a `failed`— el teléfono activa el modo túnel.
-3. A partir de ahí cada frame se dibuja en un `<canvas>` de 640 px de ancho, se codifica como JPEG
-   y se manda por el WebSocket que ya estaba abierto para la señalización. El servidor lo reenvía a
-   la PC, que lo pinta en un `<img>`.
+3. A partir de ahí el navegador le pide a la cámara que entregue directamente 480 px de ancho
+   (`applyConstraints`), cada frame se dibuja en un `<canvas>` de ese tamaño, se codifica como
+   JPEG y se manda por el WebSocket que ya estaba abierto para la señalización. El servidor lo
+   reenvía a la PC, que lo pinta en un `<img>`.
 4. La consola muestra `conexión: túnel seguro` y `codec: JPEG` para que quede claro que ya no va
    por WebRTC.
 
-En la práctica son ~10 FPS a ~380 kbps: se ve con retraso, pero se ve, y no requiere cuentas ni
+En la práctica son ~9 FPS a ~240 kbps: se ve con retraso, pero se ve, y no requiere cuentas ni
 servicios de terceros.
 
 **Detalles técnicos que importan** (medidos, no supuestos):
 
+- Copiar píxeles de un `<video>` es lo más caro que hace el teléfono. Leer 1280x720 para acabar en
+  480x270 son 921k píxeles por frame y, con la pestaña oculta, costaba **36 ms**; pedirle a la cámara
+  que entregue ya 480x270 son 130k y el mismo dibujado baja a **14 ms**. El frame entero pasó de
+  88 ms a **26 ms**, o sea del 26 % de un hilo a 10 FPS. Es una sugerencia al navegador: si no la
+  acepta, se sigue con la resolución que haya.
 - El ritmo de captura usa un **worker con `Atomics.wait`**, no `setInterval`. Los navegadores
   ralentizan los temporizadores a ~0.5 FPS cuando la pestaña se oculta, y `Atomics.wait` es una
   espera real del hilo que no se ralentiza. Con el mismo diseño usando `MessageChannel` en bucle
   funcionaba igual, pero consumía el **92 % de un núcleo**; así baja al **7 %**, que es
   básicamente solo el coste de codificar el JPEG.
+- El desglose medido por frame en la ruta del túnel, con la pestaña oculta y ya estabilizado:
+  dibujar 13.8 ms + codificar 10.9 ms + base64 0.7 ms + envío 0.3 ms = **26 ms**. Medir nada más
+  ocultar la pestaña da ~90 ms falsos, porque la cámara aún se está ajustando.
 - El servidor envía `Cross-Origin-Opener-Policy` y `Cross-Origin-Embedder-Policy` para que la
   página quede aislada por origen y ese `SharedArrayBuffer` esté disponible. Si un navegador no lo
   permite, el proyecto cae a un bucle con `MessageChannel`: sigue funcionando, con más CPU.
@@ -232,6 +241,27 @@ túnel solo expone una URL. Por eso `server.py` sirve también de proxy: si la p
 - El link es *secreto pero efímero*: quien lo tenga puede transmitir. Para una demo pública conviene
   usar `--phone-token` con una clave elegida y revocarla al terminar.
 
+### El túnel se cae, y el link se queda muerto
+
+Un `quick tunnel` de Cloudflare no es un servicio con garantías: pasa que `cloudflared` sigue vivo,
+sin decir nada y **con cero conexiones establecidas**, y el nombre que te dio deja de existir. Quien
+tiene el link recibe `ERR_NAME_NOT_RESOLVED` sin que el servidor se entere. Eso fue exactamente lo
+que pasó en la demo.
+
+Hay dos cosas para que no vuelva a pasar, y las dos hacen falta:
+
+1. **No se anuncia nada sin comprobarlo.** Cuando `cloudflared` escupe una URL, el servidor espera a
+   que el nombre resuelva *y* a que un HTTPS desde fuera devuelva `200` antes de imprimir «listo» y
+   empujar el link a la consola. Antes anunciaba el enlace en cuanto aparecía la cadena, sin
+   comprobar nada, que es como termina anunciando un enlace roto.
+2. **Un vigilante lo renueva solo.** Cada 10 segundos se comprueba el nombre. Si el proceso murió, o
+   si falló dos veces seguidas, se levanta un túnel nuevo, se **verifica igual que el primero**, y la
+   consola del dueño —que esté abierta— recibe el link actualizado por WebSocket. Medido: **28
+   segundos** desde la caída hasta el link nuevo sirviendo por HTTPS.
+
+Mientras tanto, para un hostname que no cambie hace falta un tunnel con nombre y un dominio propio
+(`cloudflared tunnel login` + `config.yml`), que requiere una cuenta de Cloudflare.
+
 ---
 
 ## Configurar un TURN propio (opcional, mejora la calidad)
@@ -287,13 +317,20 @@ si la demo va a fallar.
 | E2E directo: teléfono por el HTTPS público + `wss` por el túnel, video real, codec, bitrate, ruta ICE | E2E PUBLICO OK |
 | E2E túnel: sin ruta directa, frames JPEG llegando a la PC y **contenido que cambia** | TUNEL OK |
 | Cambio automático a túnel: con ICE limitado a `relay` el teléfono cambia solo y sigue enviando | TUNEL OK |
-| **Segundo plano**: con la pestaña oculta, ~10 FPS en la PC, cámara viva, CPU del 7 % | SEGUNDO PLANO OK |
+| **Segundo plano**: con la pestaña oculta, ~9 FPS en la PC, cámara viva, 26 % de un hilo | SEGUNDO PLANO OK |
+| **Vigilante del túnel**: se mata `cloudflared`, el servidor levanta otro solo en 28 s, el nombre nuevo resuelve, sirve HTTPS y la consola abierta recibe el push | VIGILANTE OK |
 | STUN/TURN reales (`--doctor`) | 3 STUN OK, 0 TURN (los públicos están muertos) |
 
 Las pruebas de E2E no se quedan en «la página cargó»: leen píxeles del `<canvas>` en dos instantes
 distintos y comparan, para confirmar que lo que se ve es video en movimiento y no una foto fija. Eso
 fue justo lo que destapó un bug del panel que tapaba el video, y después un congelamiento en segundo
 plano que no se veía en las pruebas simples.
+
+El coste de CPU se mide **dentro de `phone.js`**, con `performance.now()` alrededor de cada fase, y
+se lee ya estabilizado. La primera medición dio ~90 ms por frame y era un falso positivo: se leía
+justo después de ocultar la pestaña, cuando la cámara todavía se está ajustando. Comparar el
+desglose de cada fase sobre los mismos frames es lo que dejó ver que el coste estaba en copiar
+píxeles del `<video>`, y no en codificar el JPEG como se sospechaba.
 
 ## Notas
 

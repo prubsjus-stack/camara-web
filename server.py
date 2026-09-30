@@ -505,18 +505,119 @@ def lan_addresses() -> list[str]:
     return found
 
 
-def start_tunnel(public_url: str | None, http_port: int) -> None:
-    assert room is not None
-    if public_url:
-        room.public_url = public_url.rstrip("/")
-        return
+_tunnel_lock = threading.Lock()
+_tunnel_proc: subprocess.Popen | None = None
+_tunnel_fallos_dns = 0
+# URL que cloudflared acaba de escupir y que aun no se ha comprobado. Evita
+# que dos hilos anuncien a la vez y que un enlace viejo se quede con la
+# palabra cuando el vigilante levanta uno nuevo.
+_tunnel_url_pendiente: str | None = None
+_TUNEL_Patron = re.compile(r"https://[a-z0-9-]+\.trycloudflare\.com")
 
+
+def _url_resuelve(url: str) -> bool:
+    """Comprueba que el nombre publico del tunel sigue existiendo en DNS.
+
+    Es el fallo que de verdad importa: si cloudflared pierde la conexion con
+    el borde de Cloudflare, el proceso sigue vivo, no dice nada, y el nombre
+    que te dio deja de existir. Quien tiene el link recibe ERR_NAME_NOT_RESOLVED
+    sin que nadie se entere. Aqui se detecta en 20 segundos.
+    """
+    host = urlparse(url).hostname
+    if not host:
+        return False
+    try:
+        socket.getaddrinfo(host, 443, proto=socket.IPPROTO_TCP)
+        return True
+    except OSError:
+        return False
+
+
+def _tunel_responde(url: str) -> bool:
+    """Pide una pagina de verdad al tunel, no solo que el nombre exista.
+
+    Que el nombre resuelva no basta: el borde de Cloudflare puede resolver y
+    aun asi no tener ruta hasta el tunel. La unica prueba que vale es que un
+    HTTPS desde fuera devuelva 200.
+    """
+    try:
+        req = urllib.request.Request(f"{url}/api/status", headers={"User-Agent": "camara-web"})
+        with urllib.request.urlopen(req, timeout=8) as r:
+            return r.status == 200
+    except Exception:
+        return False
+
+
+def _anunciar_tunel(url: str) -> None:
+    """Espera a que el tunel responda de verdad antes de darlo por bueno.
+
+    El fallo original fue decir "listo" en cuanto cloudflared escupia la URL,
+    sin comprobar nada. Si despues el nombre no existia, quien tenia el link
+    se encontraba con ERR_NAME_NOT_RESOLVED y el servidor sinsaba nada. Aqui
+    se announcementsolo cuando el nombre resuelve y un HTTPS devuelve 200.
+    """
+    ok = False
+    for _ in range(12):  # hasta un minuto, que el borde tarda en propagar
+        time.sleep(5)
+        with _tunnel_lock:
+            vivo = _tunnel_proc is not None and _tunnel_proc.poll() is None
+        if not vivo:
+            return
+        if _url_resuelve(url) and _tunel_responde(url):
+            ok = True
+            break
+    if room is None:
+        return
+    with _tunnel_lock:
+        if room.public_url:
+            return
+        room.public_url = url
+    if ok:
+        print("\n[listo] link publico habilitado y verificado (DNS + HTTPS):", flush=True)
+    else:
+        print("\n[aviso] el tunel no llego a verificarse; queda activo y el vigilante lo revisa:", flush=True)
+    print(f"        {room.phone_link()}\n", flush=True)
+    if loop is not None:
+        asyncio.run_coroutine_threadsafe(room.broadcast_public(), loop)
+
+
+def _leer_stderr(proc: subprocess.Popen) -> None:
+    global _tunnel_url_pendiente
+    pattern = _TUNEL_Patron
+    for line in proc.stderr or ():
+        match = pattern.search(line)
+        if not match or room is None:
+            continue
+        url = match.group(0)
+        with _tunnel_lock:
+            if _tunnel_url_pendiente:
+                continue
+            _tunnel_url_pendiente = url
+        # En un hilo aparte: si se esperara aqui, nadie leeria el stderr de
+        # cloudflared, se le llenaria el pipe y se quedaria trabado.
+        threading.Thread(target=_anunciar_tunel, args=(url,), daemon=True).start()
+
+
+def _parar_tunel() -> None:
+    global _tunnel_proc
+    with _tunnel_lock:
+        proc = _tunnel_proc
+        _tunnel_proc = None
+    if proc is None:
+        return
+    with suppress(OSError):
+        proc.kill()
+    with suppress(Exception):
+        proc.wait(timeout=5)
+
+
+def _lanzar_tunel(http_port: int) -> None:
+    global _tunnel_proc
     binary = BASE_DIR / "vendor" / "cloudflared.exe"
     if not binary.exists():
         print("[aviso] falta vendor\\cloudflared.exe -> el link publico no se habilita.")
         print("        ejecuta: powershell -ExecutionPolicy Bypass -File install-cloudflared.ps1")
         return
-
     command = [str(binary), "tunnel", "--url", f"http://127.0.0.1:{http_port}"]
     try:
         proc = subprocess.Popen(
@@ -531,21 +632,65 @@ def start_tunnel(public_url: str | None, http_port: int) -> None:
     except OSError as exc:
         print(f"[aviso] no se pudo iniciar cloudflared: {exc}")
         return
+    with _tunnel_lock:
+        _tunnel_proc = proc
+    threading.Thread(target=_leer_stderr, args=(proc,), daemon=True).start()
 
-    pattern = re.compile(r"https://[a-z0-9-]+\.trycloudflare\.com")
 
-    def read_stderr() -> None:
-        assert proc.stderr is not None
-        for line in proc.stderr:
-            match = pattern.search(line)
-            if match and room is not None and not room.public_url:
-                room.public_url = match.group(0)
-                print("\n[listo] link publico habilitado:")
-                print(f"        {room.phone_link()}\n")
-                if loop is not None:
-                    asyncio.run_coroutine_threadsafe(room.broadcast_public(), loop)
+def _supervisar_tunel(http_port: int) -> None:
+    """Vigila el tunel y lo renueva solo si se cae.
 
-    threading.Thread(target=read_stderr, daemon=True).start()
+    Pasaba esto en la demo: el proceso de cloudflared seguia vivo pero sin
+    ninguna conexion establecida, y el link habia dejado de resolver. El
+    servidor seguia enseñando un link que no funcionaba y nadie se enteraba
+    hasta que el telefono de al otro lado daba error. Ahora se comprueba cada
+    10 segundos y, si el nombre no existe, se levanta un tunel nuevo y la
+    consola del dueno recibe el link actualizado sin reiniciar nada.
+    """
+    global _tunnel_fallos_dns, _tunnel_url_pendiente
+    while True:
+        time.sleep(10)
+        if room is None:
+            continue
+        with _tunnel_lock:
+            proc = _tunnel_proc
+        url = room.public_url
+        if proc is None or proc.poll() is not None:
+            motivo = "el proceso se cayo" if proc is not None else "no habia proceso"
+            _parar_tunel()
+        elif not url:
+            time.sleep(0.1)
+            continue
+        elif _url_resuelve(url):
+            _tunnel_fallos_dns = 0
+            continue
+        else:
+            _tunnel_fallos_dns += 1
+            if _tunnel_fallos_dns < 2:
+                continue
+            motivo = f"{url} ya no resuelve"
+        # Importante: hay que olvidar el link viejo antes de relanzar, o el
+        # lector de cloudflared ve que ya hay una URL guardada y descarta la
+        # nueva, dejando al servidor con un tunnel muerto y un nombre nuevo
+        # sin conocer.
+        print(f"[tunel] {motivo} -> se levanta uno nuevo", flush=True)
+        _parar_tunel()
+        with _tunnel_lock:
+            room.public_url = None
+            # Sin esto, el hilo que anuncia el enlace anterior seguiria
+            # teniendo la palabra y el nuevo pasaria sin anunciarse.
+            _tunnel_url_pendiente = None
+        _lanzar_tunel(http_port)
+        _tunnel_fallos_dns = 0
+
+
+def start_tunnel(public_url: str | None, http_port: int) -> None:
+    assert room is not None
+    if public_url:
+        room.public_url = public_url.rstrip("/")
+        return
+    _lanzar_tunel(http_port)
+    threading.Thread(target=_supervisar_tunel, args=(http_port,), daemon=True).start()
 
 
 def banner(http_port: int) -> None:
