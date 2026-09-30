@@ -64,6 +64,8 @@ class Signaling:
         self.connected_at: float | None = None
         self.ice = ice_servers
         self.lock = asyncio.Lock()
+        self.ice_log: list[str] = []
+        self.phone_report = ""
 
     def phone_link(self) -> str:
         if not self.public_url:
@@ -149,7 +151,8 @@ async def handler(ws: ServerConnection) -> None:
     await ws.send(json.dumps({"t": "ready", "role": role, "ice": room.ice}))
 
     if role == PHONE:
-        await room.send(OWNER, {"t": "phone-joined", "name": name})
+            await room.send(OWNER, {"t": "phone-joined", "name": name})
+            print(f"[senal] telefono conectado desde {ws.remote_address}", flush=True)
     else:
         await room.send(PHONE, {"t": "owner-joined"})
         if is_open(room.phone):
@@ -163,8 +166,19 @@ async def handler(ws: ServerConnection) -> None:
                 continue
             kind = msg.get("t")
             if kind == "signal":
-                payload = {"t": "signal", "from": role, "data": msg.get("data")}
+                data = msg.get("data") or {}
+                sub = data.get("kind", "?")
+                if sub == "ice":
+                    cand = data.get("candidate") or {}
+                    tipo = (cand.get("candidate") or "").split("typ ")[-1].split(" ")[0]
+                    room.ice_log.append(f"{role}:ice:{tipo}")
+                else:
+                    room.ice_log.append(f"{role}:{sub}")
+                payload = {"t": "signal", "from": role, "data": data}
                 await room.send(OWNER if role == PHONE else PHONE, payload)
+            elif kind == "report":
+                room.phone_report = str(msg.get("data", ""))[:600]
+                print(f"[telefono] {room.phone_report}")
             elif kind == "name":
                 if role == PHONE:
                     room.phone_name = str(msg.get("name", ""))[:40]
@@ -323,6 +337,8 @@ class Handler(BaseHTTPRequestHandler):
                     "phone": is_open(room.phone),
                     "name": room.phone_name,
                     "uptime": round(time.time() - START, 1),
+                    "traza": room.ice_log[-40:],
+                    "telefonoDice": room.phone_report,
                 }
             )
             return
