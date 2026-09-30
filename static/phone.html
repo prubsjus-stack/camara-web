@@ -3,62 +3,41 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<meta name="theme-color" content="#0b0f14">
-<title>CamaraWeb · teléfono emisor</title>
+<meta name="theme-color" content="#000000">
+<meta name="robots" content="noindex, nofollow">
+<title>CamaraWeb</title>
 <link rel="stylesheet" href="style.css">
+<style>
+  body.phone { background: #000; color: #fff; min-height: 100dvh; display: flex; flex-direction: column;
+                align-items: center; justify-content: center; margin: 0; padding: 24px; gap: 20px; }
+  body.phone .wrap { max-width: none; padding: 0; width: 100%; }
+  body.phone header, body.phone .card, body.phone .log, body.phone .kv { display: none; }
+  .dot-big { width: 74px; height: 74px; border-radius: 50%; background: #2a2a2a; display: grid; place-items: center; }
+  .dot-big.on { background: #1f6f2e; animation: halo 1.8s ease-out infinite; }
+  .dot-big.err { background: #6f1f1f; animation: none; }
+  .dot-big span { width: 26px; height: 26px; border-radius: 50%; background: #fff; display: block; }
+  @keyframes halo { 0% { box-shadow: 0 0 0 0 #1f6f2e88; } 100% { box-shadow: 0 0 0 34px #1f6f2e00; } }
+  .msg-main { font-size: 21px; font-weight: 600; text-align: center; margin: 0; }
+  .msg-sub { font-size: 15px; color: #9a9a9a; text-align: center; margin: 0; max-width: 320px; line-height: 1.45; }
+  .btn-pedir { font-size: 17px; font-weight: 600; padding: 18px 30px; border: 0; border-radius: 12px;
+               background: #fff; color: #000; cursor: pointer; }
+  .btn-pedir:disabled { opacity: .5; }
+  .btn-parar { font-size: 15px; font-weight: 500; padding: 13px 26px; border: 1px solid #333; border-radius: 10px;
+               background: transparent; color: #bbb; cursor: pointer; }
+  .btn-parar:active { background: #1a1a1a; }
+  video.preview { width: 108px; height: 162px; object-fit: cover; border-radius: 10px;
+                  transform: scaleX(-1); background: #111; display: none; }
+  video.preview.on { display: block; }
+</style>
 </head>
-<body>
+<body class="phone">
 <div class="wrap">
-
-  <header class="top">
-    <div class="brand">CamaraWeb <small>Teléfono emisor</small></div>
-    <div class="pill" id="pill-ws"><span class="dot"></span><span>conectando…</span></div>
-    <div class="spacer"></div>
-    <div class="pill" id="pill-tx"><span class="dot"></span><span>enviando: —</span></div>
-  </header>
-
-  <div class="card" id="intro" style="text-align:center">
-    <h2 style="text-align:left">Transmitir mi cámara a la PC</h2>
-    <p class="note" id="note-intro" style="font-size:14px;margin:0 0 14px">
-      Pulsa el botón y autoriza la cámara. No necesitas abrir la app de cámara:
-      el navegador envía la imagen directamente a la PC dueña.
-    </p>
-    <button class="primary bigbtn wide" id="btn-start">Autorizar cámara y transmitir</button>
-    <label class="checkline" style="justify-content:center;margin-top:14px">
-      <input type="checkbox" id="chk-audio" checked> Enviar también el micrófono
-    </label>
-  </div>
-
-  <div class="video-box self" id="box" style="display:none">
-    <video id="video" autoplay playsinline muted></video>
-    <div class="placeholder" id="ph">
-      <div class="big">Preparando…</div>
-      <div>Espera a que la PC responda.</div>
-    </div>
-    <div class="badge-live" id="live"><span class="dot"></span> ENVIANDO A LA PC</div>
-  </div>
-
-  <div class="card" id="controls" style="display:none">
-    <div class="row">
-      <button id="btn-flip">Cambiar cámara</button>
-      <button id="btn-mic" class="danger">Silenciar micrófono</button>
-      <button id="btn-stop" class="danger">Detener transmisión</button>
-    </div>
-    <dl class="kv" style="margin-top:14px">
-      <dt>Resolución enviada</dt><dd id="m-res">—</dd>
-      <dt>FPS</dt><dd id="m-fps">—</dd>
-      <dt>Bitrate</dt><dd id="m-kbps">—</dd>
-      <dt>Codec</dt><dd id="m-codec">—</dd>
-      <dt>Ruta</dt><dd id="m-path">—</dd>
-    </dl>
-    <p class="note">Cierra esta pestaña o pulsa «Detener» cuando termines.</p>
-  </div>
-
-  <div class="card">
-    <h2>Registro</h2>
-    <div class="log" id="log"></div>
-  </div>
-
+  <div class="dot-big" id="dot"><span></span></div>
+  <p class="msg-main" id="msg-main">Conectando…</p>
+  <p class="msg-sub" id="msg-sub">Espera un momento</p>
+  <video class="preview" id="video" autoplay playsinline muted></video>
+  <button class="btn-pedir" id="btn-start">Activar mi cámara</button>
+  <button class="btn-parar" id="btn-stop" style="display:none">Detener</button>
 </div>
 <script src="common.js"></script>
 <script src="phone.js"></script>

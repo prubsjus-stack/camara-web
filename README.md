@@ -54,16 +54,30 @@ python server.py
 ```
 
 1. Se abre solo la **consola del dueño** en el navegador de la PC.
-2. La consola muestra el **link de acceso** y su **QR**: mándalo al teléfono (WhatsApp, correo…)
-   o escanéalo. También aparece en la terminal.
-3. El teléfono abre el link, autoriza la cámara y empieza a transmitir.
+2. La consola muestra el **link de acceso** en grande, con un botón «Copiar»: mándatelo al
+   teléfono por WhatsApp, correo o el medio que quieras, y ábrelo allí. El **QR** está en un
+   desplegable opcional, para cuando tengas el teléfono physically a mano.
+3. El teléfono abre el link y **autoriza la cámara**: no hay más que hacer. Solo aparecen un
+   indicador de estado y un botón «Detener».
 4. El video aparece en la consola, con resolución, FPS, bitrate, codec y ruta de conexión en vivo.
 
 En la consola del dueño puedes pedirle al teléfono que **cambie de cámara**, **desconectarlo**,
 poner el video en **pantalla completa** o **guardar una imagen**.
 
-Para terminar: que el teléfono pulse «Detener» o cierre la pestaña. Si la red cambia, la consola
-detecta la caída y vuelve a buscar al teléfono automáticamente.
+Para terminar: que el teléfono pulse «Detener» o cierre la pestaña. Si el teléfono se bloquea o
+pasa a segundo plano, la transmisión se corta sola para no quedar emitiendo sin querer.
+
+### Si no se conecta
+
+Antes de culpar al código, la consola ahora **no se queda callada**: si en 40 segundos no
+aparece video, muestra un aviso rojo en la parte superior con los candidatos ICE que se
+descubrieron (`host`, `srflx`, `relay`) y por qué falló. Es la forma rápida de saber si el
+problema es la red o el proyecto:
+
+- **Aparecen candidatos `relay` y aun así falla** → el relé TURno no concede tiempo o está
+  saturado. Configura un TURN propio (ver más abajo).
+- **Solo aparecen `host` y `srflx` y no hay `relay`** → los TURN de `ice.json` están caídos o
+  la red bloquea los puertos. Prueba con otra red (WiFi en vez de datos móviles).
 
 ### Opciones
 
@@ -95,9 +109,28 @@ Los dos equipos están detrás de un NAT (el router de casa y la red móvil). ST
 descubrir la IP pública; no abre puertos. Si ambos NAT son simétricos —lo habitual en datos
 móviles— la conexión directa falla y hace falta un **relé TURN** que reenvíe el tráfico.
 
-`ice.json` trae STUN públicos (Google, Cloudflare) y tres relés TURN gratuitivos. La consola indica
-en todo momento si la ruta es `directo` o `TURN (relé)`. Los relés gratuitos son compartidos y
-pueden saturarse; para una demo exigente conviene un TURN propio (ver más abajo).
+`ice.json` trae STUN públicos (Cloudflare, Voipbuster, SIPnet) y cinco relés TURN gratuitivos de
+OpenRelay. La consola indica en todo momento si la ruta es `directo` o `TURN (relé)`.
+
+Los servidores de `ice.json` se **verificaron a mano** antes de dejarlos fijados, porque hay muchos
+listados públicos que ya no existen. Al probarlos, `stun.l.google.com` no respondía y
+`relay.metered.ca:443` rechazaba la conexión; se quitaron. Los que quedan se comprobaron así:
+
+| Servidor | UDP | TCP | Nota |
+| --- | --- | --- | --- |
+| `stun.cloudflare.com:3478` | responde en ~12 ms | — | el más rápido, se usa primero |
+| `stun.voipbuster.com:3478` | responde | — | respaldo |
+| `stun.sipnet.ru:3478` | responde | — | respaldo |
+| `openrelay.metered.ca:443?transport=tcp` | — | abierto | **clave en redes móviles** |
+| `openrelay.metered.ca:80` | — | abierto | |
+| `relay.metered.ca:80` | pide auth | abierto | |
+| `stun.metered.ca:80` | pide auth | abierto | |
+
+Que un TURN responda «pide auth» a una petición STUN sin credenciales es lo correcto: significa que
+el servidor existe y exige usuario. Las entradas con `?transport=tcp` sobre el puerto 443 importan
+más de lo que parece, porque muchas redes móviles bloquean el UDP saliente y solo dejan pasar el
+TCP/443. Los relés gratuitos son compartidos y pueden saturarse; para una demo exigente conviene un
+TURN propio (ver más abajo).
 
 ### 3. La negociación
 

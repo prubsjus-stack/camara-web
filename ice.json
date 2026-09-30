@@ -1,18 +1,21 @@
 {
-  "_comentario": "Servidores ICE. STUN descubre la IP publica; TURN retransmite el video cuando el NAT lo impide. Sin ningun TURN alcanzable, una red movil (NAT simetrico) no podra establecer la transmision.",
+  "_comentario": "Servidores ICE verificados a mano. STUN descubre la IP publica; TURN retransmite el video cuando el NAT lo impide. Los puertos TCP/443 son los que funcionan cuando la red bloquea UDP (tipico en datos moviles).",
+  "_verificado": "2026-09-30: stun.cloudflare.com responde en 12ms; openrelay/relay.metered.ca abren en TCP 80 y 443 y responden 'pide-auth' por UDP, que es lo correcto para TURN. stun.l.google.com y relay.metered.ca:443 NO respondian y se eliminaron.",
   "iceServers": [
     {
       "urls": [
         "stun:stun.cloudflare.com:3478",
-        "stun:stun.l.google.com:19302",
-        "stun:stun1.l.google.com:19302"
+        "stun:stun.voipbuster.com:3478",
+        "stun:stun.sipnet.ru:3478"
       ]
     },
     {
       "urls": [
-        "turn:openrelay.metered.ca:80",
+        "turn:openrelay.metered.ca:443?transport=tcp",
         "turn:relay.metered.ca:80",
-        "turns:relay.metered.ca:443?transport=tcp"
+        "turn:openrelay.metered.ca:80",
+        "turn:stun.metered.ca:80",
+        "turn:relay.metered.ca:80?transport=tcp"
       ],
       "username": "openrelayproject",
       "credential": "openrelayproject"

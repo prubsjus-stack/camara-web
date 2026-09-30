@@ -1,14 +1,52 @@
 "use strict";
 
 const $ = (id) => document.getElementById(id);
-const logEl = $("log");
-const say = (m, c) => log(logEl, m, c);
+const logEl = null;
+const say = (m, c) => console.log(c ? `[ok] ${m}` : m);
 
 let peer = null;
 let dc = null;
 const bitrate = new Bitrate();
 let statsTimer = null;
 let signal = null;
+let failTimer = null;
+let iceLog = [];
+
+const ICE_ES = {
+  new: "preparando",
+  checking: "buscando ruta directa…",
+  connected: "conectado",
+  completed: "conectado",
+  disconnected: "se cortó",
+  failed: "no se pudo",
+  closed: "cerrado",
+};
+
+function alertBox(title, body) {
+  $("alert-title").textContent = title;
+  $("alert-body").textContent = body;
+  $("alert").hidden = false;
+}
+const hideAlert = () => ($("alert").hidden = true);
+
+function setNet(state, text) {
+  setPill($("pill-net"), state, `conexión: ${text}`);
+}
+
+function setPlaceholder(title, sub) {
+  $("ph-title").textContent = title;
+  $("ph-sub").textContent = sub;
+}
+
+function setLink(url) {
+  $("link").value = url || "";
+  $("link").disabled = !url;
+  $("btn-copy").disabled = !url;
+  if (!url) {
+    $("qr").className = "qr wait";
+    $("qr").textContent = "Esperando URL pública…";
+  }
+}
 
 async function api(path) {
   const sep = path.includes("?") ? "&" : "?";
@@ -17,163 +55,177 @@ async function api(path) {
   return r.json();
 }
 
-function setLink(url) {
-  const input = $("link");
-  input.value = url || "";
-  input.disabled = !url;
-  $("btn-copy").disabled = !url;
+function loadQr() {
+  if (!$("link").value) return;
   const qr = $("qr");
-  if (url) {
-    qr.classList.remove("wait");
-    qr.innerHTML = `<img src="/api/qr.svg?t=${encodeURIComponent(qs.get("t") || "")}" alt="QR del link de acceso" width="220" height="220">`;
-    $("m-note").textContent =
-      "El link usa un túnel HTTPS público (obligatorio: el navegador solo concede la cámara en sitios seguros). " +
-      "El canal de video va directo por WebRTC; el túnel solo transporta la negociación.";
-  } else {
-    qr.classList.add("wait");
-    qr.textContent = "Esperando URL pública… (¿arrancó cloudflared?)";
-    $("m-note").textContent = "Sin URL pública el teléfono no podrá abrir la página desde otra red.";
-  }
-}
-
-function setPlaceholder(title, sub) {
-  $("ph-title").textContent = title;
-  $("ph-sub").textContent = sub;
+  qr.className = "qr";
+  qr.innerHTML = `<img src="/api/qr.svg?t=${encodeURIComponent(qs.get("t") || "")}" alt="QR del link" width="200" height="200">`;
 }
 
 function stopStream(reason) {
   if (statsTimer) clearInterval(statsTimer);
-  statsTimer = null;
+  if (failTimer) clearTimeout(failTimer);
+  statsTimer = failTimer = null;
   if (peer) peer.close();
   peer = null;
   dc = null;
   $("video").srcObject = null;
   $("live").classList.remove("on");
   for (const b of ["btn-full", "btn-snap", "btn-flip", "btn-kick"]) $(b).disabled = true;
-  for (const m of ["res", "fps", "kbps", "rtt", "codec", "path"]) $(`m-${m}`).textContent = "—";
-  for (const m of ["res", "fps", "kbps", "rtt", "codec", "path"]) $(`m-${m}`).className = "na";
-  setPill($("pill-phone"), "", "sin teléfono");
-  setPlaceholder("Esperando al teléfono", reason || "Comparte el link de acceso y autoriza la cámara desde el teléfono.");
+  for (const m of ["res", "fps", "kbps", "rtt", "codec"]) {
+    $(`m-${m}`).textContent = "—";
+    $(`m-${m}`).className = "na";
+  }
+  setNet("", "—");
+  setPlaceholder("Esperando al teléfono", reason || "Mándale el link de la derecha y autoriza la cámara.");
+}
+
+function iceTypesText() {
+  const counts = {};
+  for (const t of iceLog) counts[t] = (counts[t] || 0) + 1;
+  return Object.entries(counts).map(([k, v]) => `${v} ${k}`).join(", ");
+}
+
+function onIceFailed() {
+  alertBox(
+    "No se pudo conectar con el teléfono",
+    `La cámara se autorizó y la negociación empezó, pero no se encontró ninguna ruta entre las dos redes. ` +
+      `Candidatos descubiertos: ${iceTypesText() || "ninguno"}. ` +
+      `Suele pasar con datos móviles: hace falta un relé TURN y los públicos están saturados. ` +
+      `Prueba otra red (WiFi en vez de datos) o configura un TURN propio.`
+  );
+  setPlaceholder("Sin conexión", "No hay ruta entre tu PC y el teléfono. Ver aviso arriba.");
+  setNet("err", "falló");
 }
 
 async function makeOffer() {
   if (peer) peer.close();
+  iceLog = [];
+  hideAlert();
+  setNet("warn", "negociando");
 
   peer = new Peer(window.__ice, (msg) => signal.signal(msg));
+
+  peer.pc.onicecandidate = ((original) => (ev) => {
+    if (ev.candidate) {
+      const m = /typ (\w+)/.exec(ev.candidate.candidate);
+      if (m) iceLog.push(m[1]);
+    }
+    original(ev);
+  })(peer.pc.onicecandidate);
+
   peer.pc.oniceconnectionstatechange = () => {
-    say(`ICE: ${peer.pc.iceConnectionState}`);
-    if (peer.pc.iceConnectionState === "failed") setPlaceholder("Falló la conexión", "Revisa que el teléfono tenga internet; puede hacer falta un relé TURN.");
+    const s = peer.pc.iceConnectionState;
+    setNet(s === "connected" || s === "completed" ? "ok" : s === "failed" ? "err" : "warn", ICE_ES[s] || s);
+    if (s === "failed") onIceFailed();
   };
 
   peer.pc.ondatachannel = (ev) => {
     dc = ev.channel;
     dc.onopen = () => say("canal de control abierto", "s");
-    dc.onmessage = (m) => {
-      const msg = JSON.parse(m.data);
-      if (msg.t === "info") say(`teléfono: ${msg.name} · ${msg.width}x${msg.height} @${msg.fps}fps`, "s");
-      if (msg.t === "cam") say(`teléfono cambió a cámara ${msg.facing}`);
-    };
   };
 
   peer.pc.ontrack = (ev) => {
-    $("video").srcObject = ev.streams[0] || new MediaStream([ev.track]);
-    say(`pista recibida: ${ev.track.kind}`);
     if (ev.track.kind !== "video") return;
-    $("live").classList.add("on");
-    setPlaceholder("Recibiendo…", "");
+    $("video").srcObject = ev.streams[0] || new MediaStream([ev.track]);
+    setPlaceholder("Conectando…", "Estableciendo el flujo de video.");
     for (const b of ["btn-full", "btn-snap", "btn-flip", "btn-kick"]) $(b).disabled = false;
     pollStats();
   };
 
   peer.pc.addTransceiver("video", { direction: "recvonly" });
   peer.pc.addTransceiver("audio", { direction: "recvonly" });
+  peer.pc.createDataChannel("ctl");
 
-  dc = peer.pc.createDataChannel("ctl");
   const offer = await peer.pc.createOffer();
   await peer.pc.setLocalDescription(offer);
   signal.signal({ kind: "offer", sdp: peer.pc.localDescription.toJSON() });
-  say("oferta enviada al teléfono");
+  say("oferta enviada");
+
+  failTimer = setTimeout(() => {
+    if (peer && !["connected", "completed"].includes(peer.pc.iceConnectionState)) onIceFailed();
+  }, 40000);
 }
 
 function pollStats() {
   if (statsTimer) clearInterval(statsTimer);
+  let announced = false;
   statsTimer = setInterval(async () => {
     if (!peer) return;
     const r = await readStats(peer.pc, "in");
+    if (!r.w) return;
+    if (!announced) {
+      announced = true;
+      $("live").classList.add("on");
+      hideAlert();
+      setPlaceholder("", "");
+      if (failTimer) clearTimeout(failTimer);
+    }
     const kbps = bitrate.sample(r.bytes);
     const set = (id, val, ok = true) => {
       const el = $(`m-${id}`);
       el.textContent = val;
       el.className = ok ? "" : "na";
     };
-    set("res", r.w ? `${r.w}x${r.h}` : "—", !!r.w);
-    set("fps", r.fps || "—", !!r.fps);
-    set("kbps", r.w ? `${kbps.toFixed(0)} kbps` : "—", !!r.w);
-    set("rtt", r.rtt === null ? "n/d" : `${r.rtt} ms`, r.rtt !== null);
-    set("codec", r.codec === "n/d" ? "—" : r.codec, r.codec !== "n/d");
-    set("path", r.path, r.path !== "n/d");
-    if (r.path !== "n/d") {
-      setPill($("pill-path"), r.path.startsWith("TURN") ? "warn" : "ok", `ruta: ${r.path}`);
-    }
+    set("res", `${r.w}x${r.h}`);
+    set("fps", r.fps);
+    set("kbps", `${kbps.toFixed(0)} kbps`);
+    set("rtt", r.rtt === null ? "—" : `${r.rtt} ms`, r.rtt !== null);
+    set("codec", r.codec);
+    setNet(r.path.startsWith("TURN") ? "warn" : "ok", r.path);
   }, 1000);
 }
 
-function start(role) {
-  signal = new Signal(role, qs.get("t") || "");
+function start() {
+  signal = new Signal("owner", qs.get("t") || "");
   window.addEventListener("beforeunload", () => signal.stop());
 
   signal.on("ready", async (msg) => {
-    say("señalización lista");
     setPill($("pill-ws"), "ok", "señalización activa");
+    window.__ice = msg.ice || [];
     try {
       const cfg = await api("/api/config");
       setLink(cfg.phoneLink);
-      const turn = cfg.turnCount;
-      $("m-turn").textContent = turn ? String(turn) : "ninguno (configura TURN)";
-      $("m-turn").className = turn ? "" : "na";
+      $("m-turn").textContent = cfg.turnCount || "ninguno";
+      $("m-turn").className = cfg.turnCount ? "" : "na";
     } catch (err) {
-      say(`config: ${err.message}`, "e");
-    }
-    if (msg.ice) {
-      say(`ICE: ${msg.ice.length} servidor(es) configurados`);
-      window.__ice = msg.ice;
+      say(`config: ${err.message}`);
     }
   });
 
   signal.on("public-url", (msg) => {
     setLink(msg.url);
-    say(msg.url ? "link público actualizado" : "sin link público");
+    loadQr();
   });
 
-  signal.on("phone-joined", (msg) => {
-    say(`teléfono conectado: ${msg.name}`, "s");
-    setPill($("pill-phone"), "ok", msg.name);
-    setPlaceholder("Negociando…", "Estableciendo el canal directo con el teléfono.");
+  signal.on("phone-joined", () => {
+    setPlaceholder("Autorizando cámara…", "El teléfono tiene que darle permiso.");
+    setNet("warn", "esperando teléfono");
     makeOffer();
   });
 
   signal.on("phone-left", () => {
-    say("teléfono desconectado");
     stopStream();
+    hideAlert();
   });
 
   signal.on("signal", async (msg) => {
     const d = msg.data || {};
     if (!peer) return;
-    if (d.kind === "answer") {
-      await peer.setRemote(d.sdp);
-      say("respuesta del teléfono aplicada");
-    } else if (d.kind === "ice") {
-      await peer.addIce(d.candidate);
-    }
+    if (d.kind === "answer") await peer.setRemote(d.sdp);
+    else if (d.kind === "ice") await peer.addIce(d.candidate);
   });
 
-  signal.on("error", (msg) => say(`error: ${msg.msg || msg.code}`, "e"));
+  signal.on("error", (msg) => alertBox("Aviso del servidor", msg.msg || msg.code));
 
   signal.on("close", (msg) => {
     setPill($("pill-ws"), "err", `señalización caída (${msg.code})`);
-    say(`señalización cerrada: ${msg.reason || msg.code}`, "e");
   });
+
+  setPill($("pill-ws"), "warn", "esperando token…");
+  if (!qs.get("t")) {
+    alertBox("Falta el token", "Abre la consola desde el link que imprimió el servidor, no desde la barra de direcciones.");
+  }
 }
 
 $("btn-copy").onclick = async () => {
@@ -186,10 +238,8 @@ $("btn-copy").onclick = async () => {
   }
 };
 
-$("btn-full").onclick = () => {
-  if (document.fullscreenElement) document.exitFullscreen();
-  else $("box").requestFullscreen?.();
-};
+$("btn-full").onclick = () =>
+  document.fullscreenElement ? document.exitFullscreen() : $("box").requestFullscreen?.();
 
 $("btn-snap").onclick = () => {
   const v = $("video");
@@ -202,10 +252,10 @@ $("btn-snap").onclick = () => {
   a.download = `captura-${new Date().toISOString().replace(/[:.]/g, "-")}.png`;
   a.href = c.toDataURL("image/png");
   a.click();
-  say("imagen guardada", "s");
 };
 
 $("btn-flip").onclick = () => dc?.readyState === "open" && dc.send(JSON.stringify({ t: "flip" }));
 $("btn-kick").onclick = () => dc?.readyState === "open" && dc.send(JSON.stringify({ t: "stop" }));
+$("qr-details").addEventListener("toggle", (e) => e.target.open && loadQr());
 
-start("owner");
+start();

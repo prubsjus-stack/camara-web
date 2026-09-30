@@ -10,12 +10,16 @@
 <div class="wrap">
 
   <header class="top">
-    <div class="brand">CamaraWeb <small>PC dueña · recibe el video</small></div>
+    <div class="brand">CamaraWeb <small>PC dueña</small></div>
     <div class="pill" id="pill-ws"><span class="dot"></span><span>conectando…</span></div>
-    <div class="pill" id="pill-phone"><span class="dot"></span><span>sin teléfono</span></div>
     <div class="spacer"></div>
-    <div class="pill" id="pill-path"><span class="dot"></span><span>ruta: n/d</span></div>
+    <div class="pill" id="pill-net"><span class="dot"></span><span>conexión: —</span></div>
   </header>
+
+  <div class="alert" id="alert" hidden>
+    <div class="alert-title" id="alert-title"></div>
+    <div class="alert-body" id="alert-body"></div>
+  </div>
 
   <div class="grid">
     <div>
@@ -23,7 +27,7 @@
         <video id="video" autoplay playsinline muted></video>
         <div class="placeholder" id="ph">
           <div class="big" id="ph-title">Esperando al teléfono</div>
-          <div id="ph-sub">Comparte el link de acceso y autoriza la cámara desde el teléfono.</div>
+          <div id="ph-sub">Mándale el link de la derecha y autoriza la cámara.</div>
         </div>
         <div class="badge-live" id="live"><span class="dot"></span> EN VIVO</div>
       </div>
@@ -36,24 +40,21 @@
           <button id="btn-flip" disabled>Pedir cambiar cámara</button>
           <button id="btn-kick" class="danger" disabled>Desconectar teléfono</button>
         </div>
-        <p class="note">El video llega directo del teléfono a esta PC. No pasa por ningún servidor de video.</p>
-      </div>
-
-      <div class="card">
-        <h2>Registro de eventos</h2>
-        <div class="log" id="log"></div>
       </div>
     </div>
 
     <aside>
-      <div class="card">
-        <h2>Link de acceso</h2>
+      <div class="card hero">
+        <h2>Manda este link a tu teléfono</h2>
         <div class="linkbox">
-          <input type="text" id="link" readonly placeholder="generando túnel HTTPS…">
-          <button id="btn-copy">Copiar</button>
+          <input type="text" id="link" readonly placeholder="esperando túnel HTTPS…">
+          <button id="btn-copy" class="primary">Copiar</button>
         </div>
-        <div class="qr wait" id="qr">Esperando URL pública…</div>
-        <p class="note">Ábrelo en el teléfono con datos móviles o cualquier red. Contiene un token: solo quien tenga el link puede transmitir.</p>
+        <p class="note">Mándatelo a ti mismo por WhatsApp o correo, ábrelo en el teléfono y da "permitir". Funciona con datos móviles.</p>
+        <details id="qr-details">
+          <summary>El teléfono está aquí a mano? Escanea el QR</summary>
+          <div class="qr wait" id="qr">Esperando URL pública…</div>
+        </details>
       </div>
 
       <div class="card">
@@ -62,16 +63,10 @@
           <dt>Resolución</dt><dd class="na" id="m-res">—</dd>
           <dt>FPS</dt><dd class="na" id="m-fps">—</dd>
           <dt>Bitrate</dt><dd class="na" id="m-kbps">—</dd>
-          <dt>Latencia RTT</dt><dd class="na" id="m-rtt">—</dd>
+          <dt>Latencia</dt><dd class="na" id="m-rtt">—</dd>
           <dt>Codec</dt><dd class="na" id="m-codec">—</dd>
-          <dt>Conexión</dt><dd class="na" id="m-path">—</dd>
-          <dt>Teléfonos TURN</dt><dd class="na" id="m-turn">—</dd>
+          <dt>Relés TURN</dt><dd class="na" id="m-turn">—</dd>
         </dl>
-      </div>
-
-      <div class="card">
-        <h2>Red</h2>
-        <p class="note" id="m-note">—</p>
       </div>
     </aside>
   </div>
