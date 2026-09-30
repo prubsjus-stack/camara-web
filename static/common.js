@@ -84,6 +84,7 @@ class Signal extends EventTarget {
     if (this.name) params.set("n", this.name);
     const url = `${scheme}://${location.host}/ws?${params.toString()}`;
     this.ws = new WebSocket(url, [this.role]);
+    this.ws.binaryType = "arraybuffer";
 
     this.ws.onopen = () => {
       this.backoff = 500;
@@ -91,6 +92,10 @@ class Signal extends EventTarget {
     };
 
     this.ws.onmessage = (ev) => {
+      if (ev.data instanceof ArrayBuffer) {
+        this.emit("frame", ev.data);
+        return;
+      }
       let msg;
       try {
         msg = JSON.parse(ev.data);
@@ -127,6 +132,14 @@ class Signal extends EventTarget {
 
   signal(data) {
     this.send({ t: "signal", data });
+  }
+
+  sendBytes(data) {
+    if (this.ws && this.ws.readyState === WebSocket.OPEN) this.ws.send(data);
+  }
+
+  get abierto() {
+    return !!this.ws && this.ws.readyState === WebSocket.OPEN;
   }
 
   stop() {

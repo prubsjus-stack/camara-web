@@ -67,6 +67,9 @@ class Signaling:
         self.ice_log: list[str] = []
         self.phone_report = ""
         self.owner_report = ""
+        self.frames = 0
+        self.last_frame: float | None = None
+        self.frame_info = ""
 
     def phone_link(self) -> str:
         if not self.public_url:
@@ -84,6 +87,13 @@ class Signaling:
             return
         with suppress(websockets.exceptions.ConnectionClosed, RuntimeError):
             await sock.send(json.dumps(payload))
+
+    async def send_frame(self, data: bytes) -> None:
+        """Envia un frame JPEG al dueno como binario, sin pasar por base64."""
+        if self.owner is None:
+            return
+        with suppress(websockets.exceptions.ConnectionClosed, RuntimeError):
+            await self.owner.send(data)
 
     async def notify_both(self, payload: dict) -> None:
         await self.send(OWNER, payload)
@@ -161,12 +171,22 @@ async def handler(ws: ServerConnection) -> None:
 
     try:
         async for raw in ws:
+            if isinstance(raw, (bytes, bytearray)):
+                # Frame JPEG del telefono, reenviado tal cual a la PC.
+                if role == PHONE:
+                    room.frames += 1
+                    room.last_frame = time.time()
+                    await room.send_frame(bytes(raw))
+                continue
             try:
                 msg = json.loads(raw)
             except json.JSONDecodeError:
                 continue
             kind = msg.get("t")
-            if kind == "signal":
+            if kind == "frame-info":
+                room.frame_info = str(msg.get("data", ""))[:200]
+                print(f"[frames] {msg.get('data')}", flush=True)
+            elif kind == "signal":
                 data = msg.get("data") or {}
                 sub = data.get("kind", "?")
                 if sub == "ice":
@@ -293,6 +313,13 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
         self.send_header("Referrer-Policy", "no-referrer")
+        # Aislamiento de origen: habilita SharedArrayBuffer, que el telefono
+        # necesita para marcar el ritmo de los frames con una espera real (sin
+        # temporizadores, que el navegador frena en segundo plano). Todo lo que
+        # carga la pagina es del mismo origen, asi que no rompe nada.
+        self.send_header("Cross-Origin-Opener-Policy", "same-origin")
+        self.send_header("Cross-Origin-Embedder-Policy", "require-corp")
+        self.send_header("Cross-Origin-Resource-Policy", "same-origin")
         for key, value in (extra or {}).items():
             self.send_header(key, value)
         self.end_headers()
@@ -346,6 +373,11 @@ class Handler(BaseHTTPRequestHandler):
                     "traza": room.ice_log[-40:],
                     "telefonoDice": room.phone_report,
                     "pcDice": room.owner_report,
+                    "frames": room.frames,
+                    "frameInfo": room.frame_info,
+                    "ultimoFrame": (
+                        round(time.time() - room.last_frame, 1) if room.last_frame else None
+                    ),
                 }
             )
             return

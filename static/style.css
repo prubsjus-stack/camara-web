@@ -91,6 +91,11 @@ header.top {
 }
 
 .video-box video { width: 100%; height: 100%; object-fit: contain; display: block; background: #000; position: relative; z-index: 1; }
+.video-box img {
+  width: 100%; height: 100%; object-fit: contain; display: block; background: #000;
+  position: relative; z-index: 1;
+}
+.video-box img[hidden] { display: none; }
 .video-box.self video { transform: scaleX(-1); }
 
 .placeholder {

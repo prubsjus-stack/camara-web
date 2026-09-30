@@ -47,6 +47,77 @@ function report(que, extra = "") {
   } catch (_) {}
 }
 
+// ---------------------------------------------------------------
+// Recepcion de frames JPEG cuando el video viene por el tunel. Se
+// alternan dos object URL para no acumular memoria en cada frame.
+// ---------------------------------------------------------------
+let frame = {
+  urls: [null, null], turno: 0, cuenta: 0, bytes: 0, kbTimer: null,
+  marca: 0, cuentaPrevia: 0, bytesPrevia: 0,
+};
+
+function mostrarFrame(buffer) {
+  const img = $("frame");
+  const blob = new Blob([buffer], { type: "image/jpeg" });
+  frame.turno = 1 - frame.turno;
+  if (frame.urls[frame.turno]) URL.revokeObjectURL(frame.urls[frame.turno]);
+  frame.urls[frame.turno] = URL.createObjectURL(blob);
+  img.src = frame.urls[frame.turno];
+  img.hidden = false;
+  $("video").style.visibility = "hidden";
+  frame.cuenta++;
+  frame.bytes += buffer.byteLength;
+  if (frame.cuenta === 1) {
+    frame.marca = performance.now();
+    frame.cuentaPrevia = 0;
+    frame.bytesPrevia = 0;
+  }
+
+  if (frame.cuenta === 1) {
+    $("live").classList.add("on");
+    hideAlert();
+    setPlaceholder("", "");
+    setNet("ok", "túnel seguro");
+    report("frames-vivo", "recibiendo JPEG por el tunel");
+    for (const b of ["btn-full", "btn-snap", "btn-flip", "btn-kick"]) $(b).disabled = false;
+    // Las metricas se refrescan cada segundo mientras llegan frames. Antes se
+    // reprogramaba el temporizador en cada frame, asi que con video continuo
+    // no llegaba a dispararse nunca y el bitrate se quedaba en "—".
+    frame.kbTimer = setInterval(() => {
+      const ahora = performance.now();
+      const seg = (ahora - frame.marca) / 1000;
+      const n = frame.cuenta - frame.cuentaPrevia;
+      if (seg < 0.4 || n < 1) return;
+      const kbps = (frame.bytes - frame.bytesPrevia) * 8 / 1000 / seg;
+      frame.marca = ahora;
+      frame.cuentaPrevia = frame.cuenta;
+      frame.bytesPrevia = frame.bytes;
+      const img = $("frame");
+      $("m-kbps").textContent = `${Math.round(kbps)} kbps`;
+      $("m-kbps").className = "";
+      $("m-codec").textContent = "JPEG";
+      $("m-codec").className = "";
+      $("m-res").textContent = `${img.naturalWidth}x${img.naturalHeight}`;
+      $("m-res").className = img.naturalWidth ? "" : "na";
+      $("m-fps").textContent = `${Math.round(n / seg)}`;
+      $("m-fps").className = "";
+    }, 1000);
+  }
+}
+
+function limpiarFrames() {
+  if (frame.kbTimer) clearTimeout(frame.kbTimer);
+  for (const u of frame.urls) if (u) URL.revokeObjectURL(u);
+  frame.urls = [null, null];
+  frame.cuenta = 0;
+  frame.bytes = 0;
+  frame.cuentaPrevia = 0;
+  frame.bytesPrevia = 0;
+  $("frame").hidden = true;
+  $("frame").removeAttribute("src");
+  $("video").style.visibility = "";
+}
+
 function setLink(url) {
   $("link").value = url || "";
   $("link").disabled = !url;
@@ -75,6 +146,7 @@ function stopStream(reason) {
   if (statsTimer) clearInterval(statsTimer);
   if (failTimer) clearTimeout(failTimer);
   statsTimer = failTimer = null;
+  limpiarFrames();
   if (peer) peer.close();
   peer = null;
   dc = null;
@@ -144,6 +216,10 @@ async function makeOffer() {
 
   peer.pc.ontrack = (ev) => {
     if (ev.track.kind !== "video") return;
+    // Si el video ya llega por el tunel, no se cambia a mitad: el directo gana
+    // solo si de verdad hay pista WebRTC.
+    $("frame").hidden = true;
+    $("video").style.visibility = "";
     $("video").srcObject = ev.streams[0] || new MediaStream([ev.track]);
     setPlaceholder("Conectando…", "Estableciendo el flujo de video.");
     report("ontrack", `${ev.track.readyState} kind=${ev.track.kind}`);
@@ -164,8 +240,16 @@ async function makeOffer() {
 
   if (failTimer) clearTimeout(failTimer);
   failTimer = setTimeout(() => {
-    if (peer && !["connected", "completed"].includes(peer.pc.iceConnectionState)) onIceFailed();
-    else if (peer) report("timeout-40s", `estado=${peer.pc.iceConnectionState} pista=${$("video").videoWidth}px`);
+    if (frame.cuenta === 0) {
+      alertBox(
+        "Sigue sin llegar video",
+        "El teléfono se conectó pero no llegó imagen ni por WebRTC ni por el túnel. " +
+          "Pide que reabra el link y revoke el permiso de cámara si hace falta."
+      );
+      report("timeout-40s", `estado=${peer ? peer.pc.iceConnectionState : "sin-pc"} frames=${frame.cuenta}`);
+      return;
+    }
+    report("timeout-40s", `frames=${frame.cuenta} por tunel, todo bien`);
   }, 40000);
 }
 
@@ -229,14 +313,21 @@ function start() {
     loadQr();
   });
 
+  signal.on("frame", (buffer) => {
+    if (peer && ["connected", "completed"].includes(peer.pc?.iceConnectionState)) return;
+    mostrarFrame(buffer);
+  });
+
   signal.on("phone-joined", () => {
     setPlaceholder("Autorizando cámara…", "El teléfono tiene que darle permiso.");
     setNet("warn", "esperando teléfono");
+    limpiarFrames();
     makeOffer();
   });
 
   signal.on("phone-left", () => {
     stopStream();
+    limpiarFrames();
     hideAlert();
   });
 
