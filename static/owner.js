@@ -10,7 +10,6 @@ const bitrate = new Bitrate();
 let statsTimer = null;
 let signal = null;
 let failTimer = null;
-let iceLog = [];
 
 const ICE_ES = {
   new: "preparando",
@@ -36,6 +35,14 @@ function setNet(state, text) {
 function setPlaceholder(title, sub) {
   $("ph-title").textContent = title;
   $("ph-sub").textContent = sub;
+}
+
+// Igual que el telefono, la PC reporta su estado para poder leer el log.
+let iceTipos = [];
+function report(que, extra = "") {
+  try {
+    signal?.send({ t: "report", data: `${que}${extra ? " | " + extra : ""}` });
+  } catch (_) {}
 }
 
 function setLink(url) {
@@ -82,7 +89,7 @@ function stopStream(reason) {
 
 function iceTypesText() {
   const counts = {};
-  for (const t of iceLog) counts[t] = (counts[t] || 0) + 1;
+  for (const t of iceTipos) counts[t] = (counts[t] || 0) + 1;
   return Object.entries(counts).map(([k, v]) => `${v} ${k}`).join(", ");
 }
 
@@ -100,7 +107,7 @@ function onIceFailed() {
 
 async function makeOffer() {
   if (peer) peer.close();
-  iceLog = [];
+  iceTipos = [];
   hideAlert();
   setNet("warn", "negociando");
 
@@ -111,16 +118,22 @@ async function makeOffer() {
   peer.pc.onicecandidate = ((original) => (ev) => {
     if (ev.candidate) {
       const m = /typ (\w+)/.exec(ev.candidate.candidate);
-      if (m) iceLog.push(m[1]);
+      if (m) {
+        iceTipos.push(m[1]);
+        report("ice-candidato", m[1]);
+      }
     }
     original(ev);
   })(peer.pc.onicecandidate);
 
   peer.pc.oniceconnectionstatechange = () => {
     const s = peer.pc.iceConnectionState;
+    report("ice", `${s} candidatos=${iceTipos.join("+") || "ninguno"}`);
     setNet(s === "connected" || s === "completed" ? "ok" : s === "failed" ? "err" : "warn", ICE_ES[s] || s);
     if (s === "failed") onIceFailed();
   };
+
+  peer.pc.onconnectionstatechange = () => report("pc", peer.pc.connectionState);
 
   peer.pc.ondatachannel = (ev) => {
     dc = ev.channel;
@@ -131,6 +144,9 @@ async function makeOffer() {
     if (ev.track.kind !== "video") return;
     $("video").srcObject = ev.streams[0] || new MediaStream([ev.track]);
     setPlaceholder("Conectando…", "Estableciendo el flujo de video.");
+    report("ontrack", `${ev.track.readyState} kind=${ev.track.kind}`);
+    ev.track.addEventListener("ended", () => report("track-ended", "el receptor se corto"));
+    ev.track.addEventListener("mute", () => report("track-mute", "sin datos"));
     for (const b of ["btn-full", "btn-snap", "btn-flip", "btn-kick"]) $(b).disabled = false;
     pollStats();
   };
@@ -144,8 +160,10 @@ async function makeOffer() {
   signal.signal({ kind: "offer", sdp: peer.pc.localDescription.toJSON() });
   say("oferta enviada");
 
+  if (failTimer) clearTimeout(failTimer);
   failTimer = setTimeout(() => {
     if (peer && !["connected", "completed"].includes(peer.pc.iceConnectionState)) onIceFailed();
+    else if (peer) report("timeout-40s", `estado=${peer.pc.iceConnectionState} pista=${$("video").videoWidth}px`);
   }, 40000);
 }
 
@@ -160,9 +178,10 @@ function pollStats() {
       announced = true;
       $("live").classList.add("on");
       hideAlert();
-      setPlaceholder("", "");
-      if (failTimer) clearTimeout(failTimer);
-    }
+            setPlaceholder("", "");
+            if (failTimer) clearTimeout(failTimer);
+            report("video-vivo", `${r.w}x${r.h} ${r.fps}fps ${r.codec} ruta=${r.path}`);
+          }
     const kbps = bitrate.sample(r.bytes);
     const set = (id, val, ok = true) => {
       const el = $(`m-${id}`);
@@ -221,9 +240,20 @@ function start() {
 
   signal.on("signal", async (msg) => {
     const d = msg.data || {};
-    if (!peer) return;
-    if (d.kind === "answer") await peer.setRemote(d.sdp);
-    else if (d.kind === "ice") await peer.addIce(d.candidate);
+    if (!peer) {
+      report("senal-sin-pc", d.kind || "?");
+      return;
+    }
+    try {
+      if (d.kind === "answer") {
+        await peer.setRemote(d.sdp);
+        report("respuesta-recibida", `${d.sdp && d.sdp.type}`);
+      } else if (d.kind === "ice") {
+        await peer.addIce(d.candidate);
+      }
+    } catch (err) {
+      report("ERROR-en-senal", `${d.kind}: ${err.message}`);
+    }
   });
 
   signal.on("error", (msg) => alertBox("Aviso del servidor", msg.msg || msg.code));

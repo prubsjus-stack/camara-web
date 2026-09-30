@@ -66,6 +66,7 @@ class Signaling:
         self.lock = asyncio.Lock()
         self.ice_log: list[str] = []
         self.phone_report = ""
+        self.owner_report = ""
 
     def phone_link(self) -> str:
         if not self.public_url:
@@ -177,8 +178,13 @@ async def handler(ws: ServerConnection) -> None:
                 payload = {"t": "signal", "from": role, "data": data}
                 await room.send(OWNER if role == PHONE else PHONE, payload)
             elif kind == "report":
-                room.phone_report = str(msg.get("data", ""))[:600]
-                print(f"[telefono] {room.phone_report}")
+                texto = str(msg.get("data", ""))[:600]
+                if role == PHONE:
+                    room.phone_report = texto
+                    print(f"[telefono] {texto}", flush=True)
+                else:
+                    room.owner_report = texto
+                    print(f"[dueno]    {texto}", flush=True)
             elif kind == "name":
                 if role == PHONE:
                     room.phone_name = str(msg.get("name", ""))[:40]
@@ -339,6 +345,7 @@ class Handler(BaseHTTPRequestHandler):
                     "uptime": round(time.time() - START, 1),
                     "traza": room.ice_log[-40:],
                     "telefonoDice": room.phone_report,
+                    "pcDice": room.owner_report,
                 }
             )
             return
